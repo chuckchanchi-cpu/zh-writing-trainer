@@ -18,6 +18,10 @@ import random
 import requests
 import streamlit as st
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(BASE_DIR, "zh_writing_bank.json"), encoding="utf-8") as f:
+    QUESTION_BANK = json.load(f)
+
 st.set_page_config(page_title="🖊️ 中文寫作訓練", page_icon="🖊️", layout="wide")
 
 if hasattr(st, "secrets") and len(st.secrets) > 0:
@@ -216,17 +220,53 @@ with st.sidebar:
 st.title("🖊️ 中文寫作訓練")
 st.caption("小六作文考試 — 章節精華元素（描寫方法／修辭／層遞／襯托／首尾呼應／標點／錯別字／記敘文六要素）")
 
+def build_drill_round(topics, count):
+    """由所選 topic 題庫 + 常設 DRILLS 抽題；答案詞去重，優先覆蓋唔同詞"""
+    pool = []
+    for t in topics:
+        for item in QUESTION_BANK[t]["questions"]:
+            _, q, ans, opts, hint = item
+            pool.append([q, list(opts), ans, t, hint])
+    pool += DRILLS
+    random.shuffle(pool)
+    # 答案多樣性：同一答案詞最多 ceil(count/唔同詞數) 次
+    n_distinct = len({p[2] for p in pool})
+    max_repeat = max(1, -(-count // n_distinct)) if n_distinct else 1
+    used = {}
+    out = []
+    for p in pool:
+        if len(out) >= count:
+            break
+        a = p[2]
+        if used.get(a, 0) < max_repeat:
+            used[a] = used.get(a, 0) + 1
+            out.append(p)
+    return out[:count]
+
 if mode == "📖 技巧操練":
     if "zw_q" not in st.session_state:
         st.session_state.zw_q = []
         st.session_state.zw_checked = False
-    if st.button("🎲 生成操練題（10 題）", type="primary"):
-        st.session_state.zw_q = random.sample(DRILLS, min(10, len(DRILLS)))
-        st.session_state.zw_checked = False
-        st.rerun()
+    st.markdown("**揀 Topic（可多選；常設「綜合操練題」會自動加入）：**")
+    topics = st.multiselect(
+        "Topic",
+        list(QUESTION_BANK.keys()),
+        format_func=lambda k: QUESTION_BANK[k]["name"],
+        default=list(QUESTION_BANK.keys())[:4],
+        key="zw_topics",
+        label_visibility="collapsed",
+    )
+    count = st.slider("每輪題數", 5, 20, 10, key="zw_count")
+    if st.button("🎲 生成操練題", type="primary"):
+        if not topics:
+            st.warning("⚠️ 請揀至少一個 Topic")
+        else:
+            st.session_state.zw_q = build_drill_round(topics, count)
+            st.session_state.zw_checked = False
+            st.rerun()
     qs = st.session_state.zw_q
     if not qs:
-        st.info("👈 㩒「生成操練題」開始！每題附「記得用」提醒。")
+        st.info("👈 揀 Topic → 㩒「生成操練題」開始！每題附「記得用」提醒。")
     else:
         for i, (q, opts, ans, tid, hint) in enumerate(qs):
             st.markdown(f"**{i+1}.** {q}")
