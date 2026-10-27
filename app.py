@@ -221,6 +221,93 @@ with st.sidebar:
 st.title("🖊️ 中文寫作訓練")
 st.caption("小六作文考試 — 章節精華元素（描寫方法／修辭／層遞／襯托／首尾呼應／標點／錯別字／記敘文六要素）")
 
+def _norm_zh(s):
+    """正規化：去空白標點，用嚟寬鬆比對答案"""
+    if s is None:
+        return ""
+    s = re.sub(r"[\s，。、；：！？「」『』（）()…—…]+", "", str(s))
+    return s.strip()
+
+def _match_option(ans, opts):
+    """模糊比對答案同選項：正規化一致優先，再退 A/B/C/D 代號、單向包含（選項≥2字）"""
+    na = _norm_zh(ans)
+    if not na:
+        return None
+    for o in opts:
+        if _norm_zh(o) == na:
+            return o
+    if na.upper() in ("A", "B", "C", "D") and len(opts) == 4:
+        return opts["ABCD".index(na.upper())]
+    for o in opts:
+        no = _norm_zh(o)
+        if len(no) >= 2 and no in na:
+            return o
+    return None
+
+def ai_generate_drills(topics, count):
+    """✨ AI 生成新題：根據所選 topic 嘅寫作元素生成書面語題目（含主旨辨析 1-2 小段題型）"""
+    base, key, model = get_api_config()
+    if not key:
+        st.error("⚠️ 未偵測到 API key — 請設定 OPENAI_API_KEY（app Settings → Secrets）")
+        return []
+    topic_desc = "；".join(f"{QUESTION_BANK[t]['name']}" for t in topics)
+    prompt = (
+        "你是小六中文寫作科出題老師。根據以下寫作元素範疇出題："
+        f"{topic_desc}\n\n"
+        "要求：\n"
+        "1. 全部題目必須用**正式書面語（繁體中文）**，唔准用口語（嘅/喺/咗/係/唔/啲/佢/嘢）。\n"
+        "2. 題型：四選一選擇題（type=mcq）。如果範疇係「主旨辨析」，題目要包含 1-2 小段文字（用【段落】開頭），考學生分辨主題；其他範疇就出常規知識題。\n"
+        "3. 每題 4 個選項：1 個正確 + 3 個「似層層」干擾項（同範疇、常見混淆，唔好太易排除）。\n"
+        "4. answer 必須同其中一個 options **字面完全一樣**（原字照抄，唔准加 A/B/C/D 前綴）。\n"
+        "5. 答案唔准直接出現喺題目文字入面（主旨辨析題：主旨詞唔可以喺段落度寫出）。\n"
+        "6. 每題附 hint（審題技巧：教學生點樣分析、搵關鍵句）同 trap（指出常見陷阱／誤導位）。\n"
+        "7. 單一答案鐵律：每題只有一個正確答案；有兩個合理答案就要改題目。\n"
+        "8. 只准用教材已有嘅寫作知識點，唔可以作新事實。\n\n"
+        "輸出格式（只輸出 JSON array，唔好有其他文字）：\n"
+        '[{"type":"mcq","question":"...","options":["...","...","...","..."],"answer":"...","hint":"...","trap":"..."}]'
+    )
+    out = silra_chat([{"role": "user", "content": prompt}], max_tokens=3000)
+    if not out:
+        return []
+    m = re.search(r"\[.*\]", out, re.S)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(0))
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    valid = []
+    for item in data:
+        q = str(item.get("question") or "").strip()
+        opts = [str(o).strip() for o in (item.get("options") or []) if str(o).strip()]
+        ans = str(item.get("answer") or "").strip()
+        hint = str(item.get("hint") or "").strip()
+        trap = str(item.get("trap") or "").strip()
+        if len(opts) != 4 or not q:
+            continue
+        matched = _match_option(ans, opts)
+        if matched is None:
+            continue
+        # 答案唔准漏喺題目
+        if len(matched) >= 2 and _norm_zh(matched) in _norm_zh(q):
+            continue
+        valid.append({"q": q, "options": opts, "answer": matched, "hint": hint + "｜" + trap if trap else hint})
+    # 答案多樣性
+    n_distinct = len({v["answer"] for v in valid})
+    max_repeat = max(1, -(-count // n_distinct)) if n_distinct else 1
+    used = {}
+    out_q = []
+    for v in valid:
+        if len(out_q) >= count:
+            break
+        a = v["answer"]
+        if used.get(a, 0) < max_repeat:
+            used[a] = used.get(a, 0) + 1
+            out_q.append(v)
+    return out_q[:count]
+
 def build_drill_round(topics, count):
     """由所選 topic 題庫 + 常設 DRILLS 抽題；答案詞去重，優先覆蓋唔同詞"""
     pool = []
@@ -248,7 +335,8 @@ if mode == "📖 技巧操練":
     if "zw_q" not in st.session_state:
         st.session_state.zw_q = []
         st.session_state.zw_checked = False
-    st.markdown("**揀 Topic（可多選；常設「綜合操練題」會自動加入）：**")
+    gen_mode = st.radio("生成模式", ["📖 教材原題（即時）", "✨ AI 生成新題（書面語）"], key="zw_genmode")
+    st.markdown("**揀 Topic（可多選；教材模式會自動加入常設綜合題）：**")
     topics = st.multiselect(
         "Topic",
         list(QUESTION_BANK.keys()),
@@ -261,6 +349,15 @@ if mode == "📖 技巧操練":
     if st.button("🎲 生成操練題", type="primary"):
         if not topics:
             st.warning("⚠️ 請揀至少一個 Topic")
+        elif gen_mode.startswith("✨"):
+            with st.spinner("✨ AI 生成緊書面語新題…（約 10–30 秒）"):
+                qs = ai_generate_drills(topics, count)
+            if qs:
+                st.session_state.zw_q = qs
+                st.session_state.zw_checked = False
+                st.rerun()
+            else:
+                st.error("❌ AI 生成唔到合格題目 — 再試一次？")
         else:
             st.session_state.zw_q = build_drill_round(topics, count)
             st.session_state.zw_checked = False
