@@ -293,16 +293,17 @@ def ai_generate_drills(topics, count):
         # 答案唔准漏喺題目
         if len(matched) >= 2 and _norm_zh(matched) in _norm_zh(q):
             continue
-        valid.append({"q": q, "options": opts, "answer": matched, "hint": hint + "｜" + trap if trap else hint})
+        # 統一 5 元組格式 [q, opts, ans, tid, hint]（同教材題一致，render 先啱）
+        valid.append([q, opts, matched, "ai", hint + ("｜" + trap if trap else "")])
     # 答案多樣性
-    n_distinct = len({v["answer"] for v in valid})
+    n_distinct = len({v[2] for v in valid})
     max_repeat = max(1, -(-count // n_distinct)) if n_distinct else 1
     used = {}
     out_q = []
     for v in valid:
         if len(out_q) >= count:
             break
-        a = v["answer"]
+        a = v[2]
         if used.get(a, 0) < max_repeat:
             used[a] = used.get(a, 0) + 1
             out_q.append(v)
