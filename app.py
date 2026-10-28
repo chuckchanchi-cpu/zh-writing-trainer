@@ -295,11 +295,12 @@ def ai_generate_drills(topics, count):
             continue
         # 統一 5 元組格式 [q, opts, ans, tid, hint]（同教材題一致，render 先啱）
         valid.append([q, opts, matched, "ai", hint + ("｜" + trap if trap else "")])
-    # 答案多樣性
+    # 答案多樣性（唔夠數用剩低題目補足，保證出足 count 題）
     n_distinct = len({v[2] for v in valid})
     max_repeat = max(1, -(-count // n_distinct)) if n_distinct else 1
     used = {}
     out_q = []
+    rest_q = []
     for v in valid:
         if len(out_q) >= count:
             break
@@ -307,6 +308,12 @@ def ai_generate_drills(topics, count):
         if used.get(a, 0) < max_repeat:
             used[a] = used.get(a, 0) + 1
             out_q.append(v)
+        else:
+            rest_q.append(v)
+    for v in rest_q:
+        if len(out_q) >= count:
+            break
+        out_q.append(v)
     return out_q[:count]
 
 def build_drill_round(topics, count):
@@ -318,11 +325,12 @@ def build_drill_round(topics, count):
             pool.append([q, list(opts), ans, t, hint])
     pool += DRILLS
     random.shuffle(pool)
-    # 答案多樣性：同一答案詞最多 ceil(count/唔同詞數) 次
+    # 答案多樣性：同一答案詞最多 ceil(count/唔同詞數) 次；唔夠數就用剩低題目補足
     n_distinct = len({p[2] for p in pool})
     max_repeat = max(1, -(-count // n_distinct)) if n_distinct else 1
     used = {}
     out = []
+    rest = []
     for p in pool:
         if len(out) >= count:
             break
@@ -330,6 +338,13 @@ def build_drill_round(topics, count):
         if used.get(a, 0) < max_repeat:
             used[a] = used.get(a, 0) + 1
             out.append(p)
+        else:
+            rest.append(p)
+    # 補足：多樣性上限令題數唔夠時，用剩低題目填滿（保證出足 count 題）
+    for p in rest:
+        if len(out) >= count:
+            break
+        out.append(p)
     return out[:count]
 
 if mode == "📖 技巧操練":
